@@ -1,71 +1,56 @@
-// const retry = require('async-retry');
-// const util = require('util')
-
 const sdk = require('@defillama/sdk');
 const { getBlock } = require('../helper/getBlock');
 const ferroSwapAbi = require('./abis/ferro-swap.json');
+const { transformCronosAddress } = require('../helper/portedTokens');
 
-// const BigNumber = require('bignumber.js');
-// const { GraphQLClient, gql } = require('graphql-request');
-
-// const GET_SWAP_POOLS_RESERVES = gql`
-//   query swapPoolsReserves {
-//     swaps {
-//       lpToken
-//       balances
-//       tokens(orderBy: decimals, orderDirection: desc) {
-//         decimals
-//       }
-//     }
-//   }
-// `;
-
-// async function fetch() {
-//   var endpoint ='https://graph.cronoslabs.com/subgraphs/name/ferro/swap';
-//   var graphQLClient = new GraphQLClient(endpoint)
-
-//   const swapPoolResponse = await retry(async () => await graphQLClient.request(GET_SWAP_POOLS_RESERVES));
-
-//   const totalTVL = swapPoolResponse.swaps.reduce((poolTVL, currPool) => {
-//     const balances = currPool.balances;
-//     const tokens = currPool.tokens;
-//     const currPoolTVL = tokens.reduce(
-//       (tokenBalance, currToken, index) => {
-//         const reserves = new BigNumber(balances[index]).div((new BigNumber(10)).pow(currToken.decimals));
-//         tokenBalance = tokenBalance.plus(reserves);
-//         return tokenBalance;
-//       },
-//       new BigNumber(0),
-//     );
-//     poolTVL = currPoolTVL.plus(poolTVL);
-//     return poolTVL;
-//   }, new BigNumber(0));
-
-//   return totalTVL.toNumber();
-// }
-
-const FERRO_SWAP_ADDRESS = '0xe8d13664a42B338F009812Fa5A75199A865dA5cD';
+const threeFerPoolAddress = '0xe8d13664a42B338F009812Fa5A75199A865dA5cD';
 const CHAIN = 'cronos';
 
+const tokens = {
+  // DAI
+  "0xF2001B145b43032AAF5Ee2884e456CCd805F677D": [
+    threeFerPoolAddress,
+  ],
+  // USDC
+  "0xc21223249CA28397B4B6541dfFaEcC539BfF0c59": [
+    threeFerPoolAddress,
+  ],
+  // USDT
+  "0x66e428c3f67a68878562e79A0234c1F83c208770": [
+    threeFerPoolAddress,
+  ],
+};
+
 async function tvl(timestamp, ethBlock, chainBlocks) {
-  const block = await getBlock(timestamp, CHAIN, chainBlocks, true)
+  const block = await getBlock(timestamp, CHAIN, chainBlocks)
+  const transform = await transformCronosAddress()
+  let balances = {}
 
-  const token = (await sdk.api.abi.call({
-    target: FERRO_SWAP_ADDRESS,
-    abi: ferroSwapAbi.getToken,
-    CHAIN,
+  let calls = [];
+  for (const token in tokens) {
+    for (const poolAddress of tokens[token])
+      calls.push({
+        target: token,
+        params: poolAddress,
+      });
+  }
+  let balanceOfResults = await sdk.api.abi.multiCall({
     block,
-    params: [0],
-  })).output;
-  console.log({ token });
+    chain: CHAIN,
+    calls: calls,
+    abi: "erc20:balanceOf",
+  });
 
-  const finalBalances = {}
-  return finalBalances;
+  balanceOfResults.output.forEach((balanceOf) => {
+    let address = balanceOf.input.target;
+    let amount = balanceOf.output;
+    sdk.util.sumSingleBalance(balances, transform(address), amount)
+  });
+
+  return balances;
 }
 
 module.exports = {
-  // fetch,
-
   timetravel: true,
   misrepresentedTokens: false,
   methodology: 'sum of ferro stablecoin pool contracts balance',
